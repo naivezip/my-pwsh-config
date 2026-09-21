@@ -6,14 +6,10 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 2. Scoop Shims & Antigravity bin 优先确保在 PATH 最前
+# 2. Scoop Shims 优先确保在 PATH 最前
 $scoopShims = "$env:USERPROFILE\scoop\shims"
-$agyBin = "$env:LOCALAPPDATA\agy\bin"
 if ($env:PATH -notlike "*$scoopShims*") {
     $env:PATH = "$scoopShims;$env:PATH"
-}
-if ($env:PATH -notlike "*$agyBin*") {
-    $env:PATH = "$agyBin;$env:PATH"
 }
 
 # 3. PSReadLine 交互与智能补全增强
@@ -69,15 +65,7 @@ function gp  { git push $args }
 function gpl { git pull $args }
 function gd  { git diff $args }
 
-# 9. Antigravity CLI 默认自动模式 (跳过权限确认)
-$agyExe = "$env:LOCALAPPDATA\agy\bin\agy.exe"
-if (Test-Path $agyExe) {
-    function agy { & $agyExe --dangerously-skip-permissions $args }
-} elseif (Get-Command agy.exe -ErrorAction SilentlyContinue) {
-    function agy { agy.exe --dangerously-skip-permissions $args }
-}
-
-# 10. 常用小工具函数
+# 9. 常用小工具函数
 function which { Get-Command $args }
 function touch {
     foreach ($file in $args) {
@@ -87,7 +75,7 @@ function touch {
     }
 }
 
-# 11. 浏览器快速调用 (唤起 Edge 浏览本地 PDF、HTML 等文件或网址)
+# 10. 浏览器快速调用 (唤起 Edge 浏览本地 PDF、HTML 等文件或网址)
 function edge {
     <#
     .SYNOPSIS
