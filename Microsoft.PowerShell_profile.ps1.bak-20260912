@@ -1,0 +1,15 @@
+# 1. 禁用联网检查更新（下划线连接，不要带空格）
+$env:POSH_CHECK_VERSION = "false"
+
+# 2. 静态脚本缓存：首次生成，以后直接加载缓存，极大缩短进程拉起耗时
+$ompCache = "$env:TEMP\omp_cache.ps1"
+if (!(Test-Path $ompCache)) {
+    oh-my-posh init pwsh | Out-File -Encoding utf8 $ompCache
+}
+. $ompCache
+
+# 3. 现代化智能补全
+Set-PSReadLineOption -PredictionSource History
+Set-PSReadLineOption -PredictionViewStyle ListView
+Set-PSReadLineKeyHandler -Key Tab -Function Complete
+Set-PSReadLineKeyHandler -Key RightArrow -Function ForwardChar

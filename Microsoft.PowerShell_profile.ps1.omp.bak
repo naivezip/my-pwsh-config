@@ -1,0 +1,90 @@
+# PowerShell 7 profile —— 首屏优先（本地脚本缓存 + Oh My Posh 异步初始化）
+#
+# 关键路径只做两件事：配置 PSReadLine（此时模块已被 ConsoleHost 预加载）、安装占位 prompt
+# 并注册一次性 OnIdle 回调（实测 ~20ms）。Oh My Posh 的定位、缓存、初始化全部发生在首屏
+# 绘制之后，必要时用 InvokePrompt 重绘；缓存命中时启动过程不再产生任何 oh-my-posh 子进程。
+
+$env:POSH_CHECK_VERSION = 'false'          # 不做联网版本检查
+
+# ---- 可调参数（只在延迟阶段读取，不影响启动） ------------------------------
+$global:OmpConfig = ''                     # '' = 内置默认主题；也可填 .omp.json 的完整路径
+$global:OmpExe = 'oh-my-posh.exe'
+
+# ---- 1. PSReadLine --------------------------------------------------------
+# 交互式 ConsoleHost 在运行 profile 之前就已经导入 PSReadLine（实测 psrl_at_profile_start=true），
+# 所以这里只配置、不导入；宿主未预加载时整体推迟到 OnIdle 执行。
+$applyPSReadLine = {
+    if ($Host.UI.SupportsVirtualTerminal -and -not [Console]::IsOutputRedirected) {
+        Set-PSReadLineOption -PredictionSource History
+        Set-PSReadLineOption -PredictionViewStyle ListView
+    }
+    Set-PSReadLineKeyHandler -Key Tab -Function Complete
+    Set-PSReadLineKeyHandler -Key RightArrow -Function ForwardChar
+}
+if (Get-Module PSReadLine) { & $applyPSReadLine } else { $global:_ompPSRLDeferred = $applyPSReadLine }
+
+# ---- 2. 占位 prompt + 异步初始化 ------------------------------------------
+# 首个提示符由 PowerShell 默认 prompt 绘制，Oh My Posh 就绪后立即重绘。
+$global:_ompOriginalPromptFunction = $Function:prompt
+if (-not $global:_ompOriginalPromptFunction) {
+    $global:_ompOriginalPromptFunction = { "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) " }
+}
+function global:prompt {
+    if ($global:_ompPromptFunction) { & $global:_ompPromptFunction }
+    else { & $global:_ompOriginalPromptFunction }
+}
+$global:_ompAsyncInit = $true              # 让 oh-my-posh 只导出 _ompPromptFunction，不接管 prompt
+
+# ---- 3. 延迟阶段（首个 PowerShell.OnIdle，首屏已经在屏幕上） ---------------
+$global:_ompDeferred = {
+    try {
+        if ($global:_ompPSRLDeferred) { & $global:_ompPSRLDeferred; $global:_ompPSRLDeferred = $null }
+
+        $ompCmd = Get-Command $global:OmpExe -ErrorAction Ignore
+        if (-not $ompCmd) { return }        # 没装 Oh My Posh：保持默认提示符，且不报错
+
+        # 本地静态脚本缓存：缓存 `oh-my-posh init pwsh --print` 的产物（~59KB prompt 脚本）。
+        # 文件名带 CLI 的 LastWriteTime + 主题哈希，升级 Oh My Posh 或换主题会自动重建。
+        $sig = (Get-Item -LiteralPath $ompCmd.Source -Force -ErrorAction Ignore).LastWriteTimeUtc.Ticks
+        $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData(
+                [Text.Encoding]::UTF8.GetBytes([string]$global:OmpConfig))).Replace('-', '').Substring(0, 12)
+        $dir = Join-Path $env:LOCALAPPDATA 'oh-my-posh\init-cache'
+        $cache = Join-Path $dir "init.v1.$sig.$hash.ps1"
+
+        if (-not (Test-Path -LiteralPath $cache)) {
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $text = if ($global:OmpConfig) { & $ompCmd.Source init pwsh --print --config $global:OmpConfig | Out-String }
+            else { & $ompCmd.Source init pwsh --print | Out-String }
+            if ([string]::IsNullOrWhiteSpace($text)) { throw 'oh-my-posh init returned nothing' }
+            # 会话 id 必须每个会话都不同（上游由 init 每次生成），缓存里改成运行时生成
+            $text = [regex]::Replace($text, '\$env:POSH_SESSION_ID = "[^"]*"',
+                '$env:POSH_SESSION_ID = [guid]::NewGuid().ToString()', [Text.RegularExpressions.RegexOptions]::None)
+            # 先写临时文件再改名，避免并发会话读到写了一半的缓存
+            [IO.File]::WriteAllText("$cache.tmp", $text, [Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath "$cache.tmp" -Destination $cache -Force
+            Get-ChildItem -LiteralPath $dir -Filter 'init.*.ps1' -File |
+                Where-Object { $_.FullName -ne $cache } | Remove-Item -Force -ErrorAction Ignore
+        }
+
+        . $cache
+        if (-not $global:_ompPromptFunction) { throw 'oh-my-posh did not export a prompt function' }
+
+        Enable-PoshStreaming               # 常驻 serve 守护进程：每次回车从 ~170ms 降到 ~12ms
+
+        if (Get-Module PSReadLine) {       # 重绘提示符（此时 PSReadLine 正在等待输入）
+            $prev = [Console]::OutputEncoding
+            try {
+                [Console]::OutputEncoding = [Text.Encoding]::UTF8
+                [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+            }
+            catch {}
+            finally { [Console]::OutputEncoding = $prev }
+        }
+    }
+    catch {
+        $global:_ompPromptFunction = $null
+        if ($cache) { Remove-Item -LiteralPath $cache -Force -ErrorAction Ignore }  # 自愈：损坏的缓存下次重建
+        Write-Warning "Oh My Posh 初始化失败，已回退到默认提示符：$($_.Exception.Message)"
+    }
+}
+Register-EngineEvent -SourceIdentifier PowerShell.OnIdle -MaxTriggerCount 1 -Action $global:_ompDeferred | Out-Null
