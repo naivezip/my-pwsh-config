@@ -1,6 +1,9 @@
 # My PowerShell Configuration 🚀
 
-一套基于 PowerShell 7 (`pwsh`) 的现代化、高性能终端生产力配置。
+一套基于 PowerShell 7 (`pwsh`) 的现代化终端生产力配置。
+
+**为什么不是WSL**
+WSL在纯CLI确实比pwsh好用，但是我真的需要桌面版agent QAQ
 
 ## ✨ 特性亮点
 
