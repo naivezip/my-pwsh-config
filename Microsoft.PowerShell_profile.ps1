@@ -81,7 +81,7 @@ function edge {
     .SYNOPSIS
         使用 Microsoft Edge 打开本地文件 (PDF、HTML、图片等) 或网页链接。
     .DESCRIPTION
-        将传入的相对路径自动解析为完整绝对路径，避免 Edge 因工作目录不同而找不到文件。
+        将传入的相对路径自动解析为规范的 file:/// 格式 URL，彻底解决包含空格、中文、中括号 [ ] 等特殊符号时传参被拆碎的问题。
         支持 Tab 键自动补全文件名、批量打开多个文件以及通配符 (如 edge *.pdf)。
     .EXAMPLE
         edge document.pdf
@@ -113,26 +113,49 @@ function edge {
         # 1. 命令行选项参数 (如 --inprivate)
         if ($item -match '^--?') {
             $targetList.Add($item)
+            continue
         }
-        # 2. 本地已存在的文件/目录 (字面路径，兼容文件名中含 [ ] 等特殊字符)
-        elseif (Test-Path -LiteralPath $item -ErrorAction SilentlyContinue) {
-            $targetList.Add((Convert-Path -LiteralPath $item))
+
+        # 2. 网络 URL 或本地服务地址
+        if ($item -match '^(https?://|file://|edge://|about:)' -or $item -match '^localhost(:\d+)?(/.*)?$' -or $item -match '^www\.') {
+            $targetList.Add($item)
+            continue
         }
-        # 3. 通配符匹配 (如 *.pdf)
-        elseif (Test-Path -Path $item -ErrorAction SilentlyContinue) {
-            $resolved = (Resolve-Path -Path $item -ErrorAction SilentlyContinue).ProviderPath
-            if ($resolved) {
-                foreach ($res in $resolved) { $targetList.Add($res) }
-            } else {
-                $targetList.Add($item)
+
+        # 3. 本地精准匹配 (字面路径，兼容文件名中含空格、中文、[ ] 等特殊字符)
+        if (Test-Path -LiteralPath $item -ErrorAction SilentlyContinue) {
+            $fullPath = Convert-Path -LiteralPath $item
+            $uri = [System.Uri]::new($fullPath).AbsoluteUri
+            $targetList.Add($uri)
+            continue
+        }
+
+        # 4. 通配符匹配 (如 *.pdf 或 .\*.pdf)
+        $matched = $false
+        if ($item -match '[\*\?]') {
+            $parent = Split-Path -Path $item -Parent
+            $leaf = Split-Path -Path $item -Leaf
+            if (-not $parent) { $parent = "." }
+
+            $found = @()
+            if (Test-Path -LiteralPath $parent -ErrorAction SilentlyContinue) {
+                $found = @(Get-ChildItem -LiteralPath $parent -Filter $leaf -File -ErrorAction SilentlyContinue)
+            }
+            if ($found.Count -eq 0) {
+                $found = @(Get-ChildItem -Path $item -File -ErrorAction SilentlyContinue)
+            }
+
+            if ($found.Count -gt 0) {
+                $matched = $true
+                foreach ($f in $found) {
+                    $uri = [System.Uri]::new($f.FullName).AbsoluteUri
+                    $targetList.Add($uri)
+                }
             }
         }
-        # 4. 网络 URL 或本地服务地址
-        elseif ($item -match '^(https?://|file://|edge://|about:)' -or $item -match '^localhost(:\d+)?(/.*)?$' -or $item -match '^www\.') {
-            $targetList.Add($item)
-        }
-        # 5. 未找到的文件
-        else {
+
+        # 5. 未找到匹配项
+        if (-not $matched) {
             Write-Warning "未找到文件或路径: $item"
         }
     }
