@@ -86,3 +86,71 @@ function touch {
         }
     }
 }
+
+# 11. 浏览器快速调用 (唤起 Edge 浏览本地 PDF、HTML 等文件或网址)
+function edge {
+    <#
+    .SYNOPSIS
+        使用 Microsoft Edge 打开本地文件 (PDF、HTML、图片等) 或网页链接。
+    .DESCRIPTION
+        将传入的相对路径自动解析为完整绝对路径，避免 Edge 因工作目录不同而找不到文件。
+        支持 Tab 键自动补全文件名、批量打开多个文件以及通配符 (如 edge *.pdf)。
+    .EXAMPLE
+        edge document.pdf
+        edge ./preview.html
+        edge *.pdf
+        edge https://www.bing.com
+    #>
+    param(
+        [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+        [string[]]$Path
+    )
+
+    $edgeExe = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+    if (-not (Test-Path $edgeExe)) {
+        $edgeExe = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+    }
+    if (-not (Test-Path $edgeExe)) {
+        $edgeExe = 'msedge'
+    }
+
+    if (-not $Path -or $Path.Count -eq 0) {
+        Start-Process $edgeExe
+        return
+    }
+
+    $targetList = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($item in $Path) {
+        # 1. 命令行选项参数 (如 --inprivate)
+        if ($item -match '^--?') {
+            $targetList.Add($item)
+        }
+        # 2. 本地已存在的文件/目录 (字面路径，兼容文件名中含 [ ] 等特殊字符)
+        elseif (Test-Path -LiteralPath $item -ErrorAction SilentlyContinue) {
+            $targetList.Add((Convert-Path -LiteralPath $item))
+        }
+        # 3. 通配符匹配 (如 *.pdf)
+        elseif (Test-Path -Path $item -ErrorAction SilentlyContinue) {
+            $resolved = (Resolve-Path -Path $item -ErrorAction SilentlyContinue).ProviderPath
+            if ($resolved) {
+                foreach ($res in $resolved) { $targetList.Add($res) }
+            } else {
+                $targetList.Add($item)
+            }
+        }
+        # 4. 网络 URL 或本地服务地址
+        elseif ($item -match '^(https?://|file://|edge://|about:)' -or $item -match '^localhost(:\d+)?(/.*)?$' -or $item -match '^www\.') {
+            $targetList.Add($item)
+        }
+        # 5. 未找到的文件
+        else {
+            Write-Warning "未找到文件或路径: $item"
+        }
+    }
+
+    if ($targetList.Count -gt 0) {
+        Start-Process $edgeExe -ArgumentList $targetList
+    }
+}
+
